@@ -24,7 +24,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentBgmStartTime = 0;
     let currentBgmPauseTime = 0;
     let isBgmPlaying = false;
-    let isBgmLoop = false;
+    let isBgmLoop = true;
     
     // UI State
     let isSeeking = false;
@@ -186,7 +186,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function playBgmBuffer(buffer, soundData, fadeTime = 0) {
         const now = audioContext.currentTime;
         
-        // Fade Out Old
+        // Fade Out Old (前の曲はフェードアウトさせる)
         if (currentBgmSource && isBgmPlaying) {
             const oldGain = currentBgmGain;
             const oldSource = currentBgmSource;
@@ -204,10 +204,14 @@ document.addEventListener('DOMContentLoaded', () => {
         source.connect(gain);
         gain.connect(audioContext.destination);
 
-        // Initial Volume (Fade In)
+        // --- 変更点ここから ---
+        // Initial Volume (Fade In ではなく カットインに変更)
         const vol = document.getElementById('bgm-volume').value * globalSettings.masterVolume;
-        gain.gain.setValueAtTime(0, now);
-        gain.gain.linearRampToValueAtTime(vol, now + fadeTime);
+        
+        // 0からフェードインさせるのではなく、即座に目標の音量を設定する
+        gain.gain.setValueAtTime(vol, now); 
+        // gain.gain.linearRampToValueAtTime(vol, now + fadeTime); // フェードイン行を削除またはコメントアウト
+        // --- 変更点ここまで ---
 
         source.start(now);
         
@@ -361,7 +365,13 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
             const nameDisplay = data.name.replace(/\.[^/.]+$/, "");
             const presetsHTML = ['#3ea6ff', '#2ba640', '#ff4e45'].map(c => `<div class="color-swatch" style="background-color: ${c};" data-color="${c}"></div>`).join('');
-            const volSlider = `<input type="range" class="volume-slider" min="0" max="1" step="0.01" value="1">`;
+            
+            // --- 変更点ここから ---
+            // 保存された音量があればそれを初期値にする (なければ1)
+            const savedVol = globalSettings.sounds && globalSettings.sounds[data.id] ? globalSettings.sounds[data.id].volume : 1;
+            const volSlider = `<input type="range" class="volume-slider" min="0" max="1" step="0.01" value="${savedVol}">`;
+            // --- 変更点ここまで ---
+
             button.innerHTML = `<div class="btn-name">${nameDisplay}</div><div class="controls-wrapper">${volSlider}<div class="color-presets">${presetsHTML}</div></div>`;
         }
 
@@ -399,7 +409,23 @@ document.addEventListener('DOMContentLoaded', () => {
         if (type === 'se') {
             const vs = button.querySelector('.volume-slider');
             if(vs) {
-                vs.addEventListener('input', (e) => { e.stopPropagation(); updateSliderBackground(e.target); });
+                // 初期表示時の背景色更新
+                updateSliderBackground(vs);
+
+                vs.addEventListener('input', (e) => { 
+                    e.stopPropagation(); 
+                    updateSliderBackground(e.target);
+                    
+                    // --- 変更点ここから ---
+                    // 音量変更時に設定を保存する処理を追加
+                    if (!globalSettings.sounds) globalSettings.sounds = {};
+                    if (!globalSettings.sounds[data.id]) globalSettings.sounds[data.id] = {};
+                    
+                    globalSettings.sounds[data.id].volume = parseFloat(e.target.value);
+                    saveSettings(); // 設定をLocalStorageに保存
+                    // --- 変更点ここまで ---
+                });
+                
                 enableWheelControl(vs);
                 button.querySelectorAll('.color-swatch').forEach(s => s.addEventListener('click', (e) => { e.stopPropagation(); button.style.backgroundColor = e.target.dataset.color; }));
             }
@@ -464,8 +490,9 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('bgm-indicator').style.display = isPlaying ? 'inline-block' : 'none';
     }
 
-    function updatePlayPauseIcon() {
-        document.getElementById('bgm-play-pause-btn').textContent = isBgmPlaying ? '⏸' : '▶';
+   function updatePlayPauseIcon() {
+        // アイコン名に変更
+        document.getElementById('bgm-play-pause-btn').textContent = isBgmPlaying ? 'pause' : 'play_arrow';
     }
 
     // --- Listeners ---
@@ -710,7 +737,103 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }, 1000);
 
+// --- External Folders Logic ---
+    async function loadExternalFolders() {
+        try {
+            const res = await fetch('/api/folders');
+            const folders = await res.json();
+            renderFolderList(folders);
+        } catch(e) { console.error(e); }
+    }
+
+    function renderFolderList(folders) {
+        const list = document.getElementById('ext-folder-list');
+        list.innerHTML = '';
+        if (folders.length === 0) {
+            list.innerHTML = '<div style="color:#666; font-size:0.8rem; text-align:center;">設定されたフォルダはありません</div>';
+            return;
+        }
+        folders.forEach((f, index) => {
+            const row = document.createElement('div');
+            row.style.display = 'flex'; row.style.justifyContent = 'space-between'; row.style.alignItems = 'center';
+            row.style.marginBottom = '5px'; row.style.fontSize = '0.9rem'; row.style.borderBottom = '1px solid #333'; row.style.paddingBottom = '5px';
+            
+            const info = document.createElement('div');
+            info.innerHTML = `<span style="color:var(--accent-color); font-weight:bold;">[${f.type}]</span> ${f.path}`;
+            info.style.overflow = 'hidden'; info.style.textOverflow = 'ellipsis'; info.style.whiteSpace = 'nowrap'; info.style.marginRight = '10px';
+            
+            const delBtn = document.createElement('button');
+            delBtn.textContent = '×';
+            delBtn.style.background = '#ff4e45'; delBtn.style.padding = '2px 8px'; delBtn.style.fontSize = '0.8rem';
+            delBtn.onclick = () => removeExternalFolder(index);
+            
+            row.appendChild(info);
+            row.appendChild(delBtn);
+            list.appendChild(row);
+        });
+    }
+
+    async function addExternalFolder() {
+        const pathInput = document.getElementById('ext-folder-path');
+        const typeInput = document.getElementById('ext-folder-type');
+        const pathStr = pathInput.value.trim().replace(/"/g, ''); // パスの前後の引用符を削除
+        
+        if (!pathStr) return alert('パスを入力してください');
+        
+        try {
+            const res = await fetch('/api/folders');
+            const folders = await res.json();
+            
+            // 重複チェック
+            if(folders.some(f => f.path === pathStr)) return alert('このフォルダは既に登録されています');
+
+            folders.push({ path: pathStr, type: typeInput.value, alias: pathStr.split(/[\\/]/).pop() });
+            
+            await fetch('/api/folders', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(folders)
+            });
+            
+            pathInput.value = '';
+            loadExternalFolders();
+            loadSounds(); // サウンド一覧を再読み込み
+            showNotification('フォルダを追加しました', 'success');
+        } catch(e) {
+            alert('保存に失敗しました');
+        }
+    }
+
+    async function removeExternalFolder(index) {
+        if(!confirm('このフォルダの監視を解除しますか？')) return;
+        try {
+            const res = await fetch('/api/folders');
+            const folders = await res.json();
+            folders.splice(index, 1);
+            await fetch('/api/folders', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(folders)
+            });
+            loadExternalFolders();
+            loadSounds();
+        } catch(e) { console.error(e); }
+    }
+
+    // イベントリスナーの追加
+    document.getElementById('add-ext-folder-btn').addEventListener('click', addExternalFolder);
+    
+    // 設定ボタンを押したときにフォルダ一覧も更新するように修正
+    const originalSettingsClick = document.getElementById('settings-btn').onclick; // 既存があれば
+    document.getElementById('settings-btn').addEventListener('click', () => {
+         loadExternalFolders();
+    });
+
+
     loadSettings();
     loadSounds();
     updateAllSliders();
+    if (isBgmLoop) {
+        document.getElementById('bgm-loop-btn').classList.add('active');
+    }
 });
