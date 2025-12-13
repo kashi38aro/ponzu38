@@ -231,41 +231,63 @@ input[type=range] {
     -webkit-appearance: none;
     appearance: none;
     width: 100%;
-    height: 100%;
-    background: transparent;
+    height: 100%; /* コンテナいっぱいに広げる */
+    background: transparent; /* 背景はJSのlinear-gradientで描画するため透明に */
     cursor: pointer;
-    position: relative;
-    z-index: 1;
     margin: 0;
     outline: none;
+    
+    /* トラックの見た目（JSで書き換えるlinear-gradientが表示される） */
+    /* 背景の位置を中心に、高さ3pxの線として表示 */
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 100% 3px; 
+    transition: background-size 0.1s;
 }
 
 /* トラック（バー） */
 input[type=range]::-webkit-slider-runnable-track {
     width: 100%;
-    height: 4px;
-    /* 背景色はJSでlinear-gradientを設定して進捗を表示 */
-    background: #4d4d4d; 
-    border-radius: 2px;
-    transition: height 0.1s;
+    height: 100%;
+    background: transparent;
+    border: none;
 }
 
 /* つまみ（サム） */
 input[type=range]::-webkit-slider-thumb {
     -webkit-appearance: none;
     appearance: none;
-    height: 12px;
-    width: 12px;
+    height: 14px;
+    width: 14px;
     border-radius: 50%;
-    background: var(--accent-color); /* ここをテーマカラーに統一 */
-    cursor: pointer;
-    /* トラックの中心(height:4px)に対して中央揃え: 12px/2 - 4px/2 = 4pxずらす必要があるが
-       webkit-slider-thumbはmargin-topで調整する */
-    margin-top: -4px; 
-    box-shadow: 0 1px 3px rgba(0,0,0,0.5);
+    background: var(--accent-color);
+    box-shadow: 0 0 5px rgba(0,0,0,0.3);
+    
+    /* 垂直中央揃えの計算: (親の高さ - つまみの高さ) / 2 */
+    /* 親(input/track)が24px, つまみが14px -> (24-14)/2 = 5px */
+    margin-top: 5px; 
+    
     transform: scale(0); /* 通常時は隠す */
     transition: transform 0.1s cubic-bezier(0.4, 0, 0.2, 1);
-    border: none; /* 白い枠線を削除 */
+}
+
+/* --- ホバー時のアニメーション --- */
+
+/* ホバー時にトラックを少し太く */
+.slider-container:hover input[type=range],
+.se-vol-wrapper:hover input[type=range] {
+    background-size: 100% 5px;
+}
+
+/* ホバー時につまみを表示 */
+.slider-container:hover input[type=range]::-webkit-slider-thumb,
+.se-vol-wrapper:hover input[type=range]::-webkit-slider-thumb {
+    transform: scale(1);
+}
+
+/* ドラッグ中（アクティブ）はつまみを強調 */
+input[type=range]:active::-webkit-slider-thumb {
+    transform: scale(1.3);
 }
 
 /* ホバー時のエフェクト */
@@ -279,10 +301,6 @@ input[type=range]::-webkit-slider-thumb {
     margin-top: -3px;
 }
 
-/* ドラッグ中（アクティブ） */
-input[type=range]:active::-webkit-slider-thumb {
-    transform: scale(1.5); /* つまみを大きく */
-}
 
 /* Master Volume Specific */
 .master-volume {
@@ -355,8 +373,13 @@ input[type=range]:active::-webkit-slider-thumb {
 }
 
 /* SE Style */
-#se-board .sound-btn { aspect-ratio: 1 / 1; flex-direction: column; padding: 8px; overflow: hidden; }
-
+#se-board .sound-btn { 
+    aspect-ratio: 1 / 1; 
+    flex-direction: column; 
+    padding: 8px; 
+    overflow: hidden; 
+    justify-content: space-between; /* 上下に配置 */
+}
 /* BGM Style */
 #bgm-board .sound-btn {
     width: 100%; height: 60px; aspect-ratio: auto;
@@ -390,9 +413,63 @@ input[type=range]:active::-webkit-slider-thumb {
 #se-board .sound-btn .btn-name { 
     text-align: center; 
     white-space: normal; 
-    font-size: 0.95rem; 
-    display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; 
+    font-size: 0.85rem; 
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; 
     overflow: hidden; 
+    height: 2.4em; /* 高さを制限 */
+    line-height: 1.2;
+    margin-bottom: 5px;
+    pointer-events: none;
+}
+
+/* SE音量バーのラッパー */
+.se-vol-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    width: 100%;
+    height: 24px; /* 高さを確保して操作しやすく */
+    background: rgba(0,0,0,0.3); /* 背景を少し濃くして視認性アップ */
+    padding: 0 8px;
+    border-radius: 12px;
+    z-index: 100; /* クリック判定を最優先に */
+    margin-top: auto; /* 下寄せ */
+}
+
+.se-vol-wrapper input[type=range]::-webkit-slider-thumb {
+    height: 12px; 
+    width: 12px;
+    /* (24px - 12px) / 2 = 6px */
+    margin-top: 6px; 
+}
+
+/* フッターのSE停止ボタン */
+.se-stop-btn {
+    width: auto;
+    padding: 0 12px;
+    background-color: rgba(255, 78, 69, 0.15); 
+    color: #ff8a80;
+    border-color: rgba(255, 78, 69, 0.3);
+    font-weight: bold;
+    font-size: 0.8rem;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+}
+.se-stop-btn:hover {
+    background-color: var(--danger-color);
+    color: white;
+}
+
+
+
+/* SE音量スライダー本体 */
+.se-vol-wrapper input[type=range] {
+    flex-grow: 1;
+    height: 100%;
+    /* SE用は背景バーを少し細めに */
+    background-size: 100% 2px;
 }
 
 /* BGM Metadata Layout */
@@ -447,12 +524,13 @@ input[type=range]:active::-webkit-slider-thumb {
     align-items: center;
 }
 
-.bgm-seek-wrapper .slider-container {
-    flex-grow: 1;       /* 横幅いっぱいに広げる */
-    width: auto;        /* 固定幅を解除 */
-    height: 16px;       /* 高さを確保 */
+.slider-container {
     display: flex;
     align-items: center;
+    width: 100%;
+    position: relative;
+    height: 24px; /* 操作しやすい高さ */
+    cursor: pointer;
 }
 
 .bgm-time { 
