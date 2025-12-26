@@ -6,9 +6,686 @@
     <meta name="description" content="OBS用効果音リモートコントロールシステム">
     <meta name="theme-color" content="#202020">
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
-    <link rel="stylesheet" href="style.css">
     <title>OBSポン出しツール</title>
-    <link rel="stylesheet" href="style.css">
+    <style>
+        :root {
+    /* ベースカラー (YouTube Dark Mode Like) */
+    --bg-color: #0f0f0f;
+    --card-bg: #272727;
+    --text-color: #f1f1f1;
+    --sub-text-color: #aaaaaa;
+    
+    /* テーマカラー (初期値: ブルー) - JSで書き換えられます */
+    --accent-color: #3ea6ff;
+    --accent-hover: #6ebbff;
+    --accent-light: rgba(62, 166, 255, 0.2);
+    
+    /* ステータスカラー */
+    --danger-color: #ff4e45;
+    --success-color: #2ba640;
+    --warning-color: #fbc02d;
+    
+    /* レイアウト変数 */
+    --columns: 5; 
+    --bgm-columns: 1;
+    --gap: 12px;
+    --footer-height: 100px;
+}
+
+* {
+    box-sizing: border-box;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+body {
+    margin: 0;
+    padding: 0;
+    font-family: Roboto, Arial, sans-serif;
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* スクロールバーのカスタマイズ */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+::-webkit-scrollbar-track {
+    background: #1a1a1a; 
+}
+::-webkit-scrollbar-thumb {
+    background: #555; 
+    border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: #777; 
+}
+
+.container {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    max-width: 1200px;
+    margin: 0 auto;
+    width: 100%;
+    position: relative;
+    padding-bottom: var(--footer-height);
+}
+
+/* --- Header --- */
+.header {
+    background-color: #202020;
+    padding: 10px 20px 0 20px;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+    z-index: 100;
+    flex-shrink: 0;
+}
+
+.header-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
+}
+
+.title-group {
+    display: flex;
+    align-items: baseline;
+    gap: 15px;
+}
+
+.header h1 {
+    margin: 0;
+    font-size: 1.3rem;
+    color: white;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+}
+
+.clock-display {
+    font-family: 'Roboto Mono', monospace;
+    font-size: 1.1rem;
+    color: var(--accent-color);
+    font-weight: bold;
+    text-shadow: 0 0 10px var(--accent-light);
+}
+
+.controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+}
+
+/* Tabs */
+.tabs {
+    display: flex;
+    gap: 20px;
+    margin-top: 5px;
+}
+
+.tab-btn {
+    background-color: transparent;
+    border: none;
+    color: var(--sub-text-color);
+    padding: 12px 10px;
+    cursor: pointer;
+    font-weight: bold;
+    transition: all 0.2s;
+    font-size: 1rem;
+    position: relative;
+    text-transform: uppercase;
+}
+
+.tab-btn.active {
+    color: var(--text-color);
+}
+
+.tab-btn.active::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: 3px;
+    background-color: var(--accent-color);
+    border-radius: 3px 3px 0 0;
+}
+
+.tab-btn:hover:not(.active) {
+    color: #fff;
+}
+
+/* --- Buttons --- */
+button {
+    background-color: #333;
+    border: none;
+    color: var(--text-color);
+    padding: 8px 16px;
+    border-radius: 18px; /* Pill shape */
+    cursor: pointer;
+    font-size: 0.9rem;
+    font-weight: 500;
+    transition: background 0.2s, transform 0.1s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+}
+
+button:hover { background-color: #4d4d4d; }
+button:active { transform: scale(0.98); }
+
+#stop-all-btn { background-color: rgba(255, 78, 69, 0.15); color: #ff8a80; }
+#stop-all-btn:hover { background-color: rgba(255, 78, 69, 0.3); }
+
+#reservation-btn.active {
+    background-color: rgba(43, 166, 64, 0.2);
+    color: #69f0ae;
+    border: 1px solid var(--success-color);
+}
+
+/* Add Button (BGM) */
+#add-bgm-slot-btn {
+    width: 100%;
+    margin-bottom: 15px;
+    padding: 12px;
+    border: 1px dashed #555;
+    background: transparent;
+    color: var(--sub-text-color);
+    border-radius: 8px;
+}
+#add-bgm-slot-btn:hover {
+    border-color: var(--accent-color);
+    color: var(--accent-color);
+    background: rgba(255,255,255,0.03);
+}
+
+.section-divider {
+    border: 0;
+    border-top: 1px solid #333;
+    margin: 25px 0 15px 0;
+    position: relative;
+}
+.section-divider::after {
+    content: 'ライブラリ';
+    position: absolute;
+    top: -12px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--bg-color);
+    padding: 0 15px;
+    color: var(--sub-text-color);
+    font-size: 0.8rem;
+    font-weight: bold;
+}
+
+/* --- Modern Range Input Style (Youtube-like) --- */
+
+/* スライダーコンテナ（ホバー判定領域） */
+.slider-container {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    position: relative;
+    height: 20px;
+    cursor: pointer;
+}
+
+input[type=range] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 100%; /* コンテナいっぱいに広げる */
+    background: transparent; /* 背景はJSのlinear-gradientで描画するため透明に */
+    cursor: pointer;
+    margin: 0;
+    outline: none;
+    
+    /* トラックの見た目（JSで書き換えるlinear-gradientが表示される） */
+    /* 背景の位置を中心に、高さ3pxの線として表示 */
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 100% 3px; 
+    transition: background-size 0.1s;
+}
+
+/* トラック（バー） */
+input[type=range]::-webkit-slider-runnable-track {
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    border: none;
+}
+
+/* つまみ（サム） */
+input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    height: 14px;
+    width: 14px;
+    border-radius: 50%;
+    background: var(--accent-color);
+    box-shadow: 0 0 5px rgba(0,0,0,0.3);
+    
+    /* 垂直中央揃えの計算: (親の高さ - つまみの高さ) / 2 */
+    /* 親(input/track)が24px, つまみが14px -> (24-14)/2 = 5px */
+    margin-top: 5px; 
+    
+    transform: scale(0); /* 通常時は隠す */
+    transition: transform 0.1s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* --- ホバー時のアニメーション --- */
+
+/* ホバー時にトラックを少し太く */
+.slider-container:hover input[type=range],
+.se-vol-wrapper:hover input[type=range] {
+    background-size: 100% 5px;
+}
+
+/* ホバー時につまみを表示 */
+.slider-container:hover input[type=range]::-webkit-slider-thumb,
+.se-vol-wrapper:hover input[type=range]::-webkit-slider-thumb {
+    transform: scale(1);
+}
+
+/* ドラッグ中（アクティブ）はつまみを強調 */
+input[type=range]:active::-webkit-slider-thumb {
+    transform: scale(1.3);
+}
+
+/* ホバー時のエフェクト */
+.slider-container:hover input[type=range]::-webkit-slider-runnable-track {
+    height: 6px; /* トラックを少し太く */
+    margin-top: -1px;
+}
+
+.slider-container:hover input[type=range]::-webkit-slider-thumb {
+    transform: scale(1); /* つまみを表示 */
+    margin-top: -3px;
+}
+
+
+/* Master Volume Specific */
+.master-volume {
+    display: flex; align-items: center; gap: 12px; background: #202020; padding: 0 15px; border-radius: 30px; border: 1px solid #333; height: 40px;
+}
+.master-volume .slider-container { width: 100px; }
+
+/* --- Sound Board --- */
+.sound-board-container {
+    flex-grow: 1;
+    position: relative;
+    overflow: hidden;
+}
+
+.sound-board {
+    position: absolute;
+    top: 0; left: 0; width: 100%; height: 100%;
+    padding: 20px;
+    overflow-y: auto;
+    display: block;
+    gap: var(--gap);
+    align-content: start;
+    -webkit-overflow-scrolling: touch;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease;
+}
+
+.sound-board.active { opacity: 1; pointer-events: auto; z-index: 1; }
+
+.category-group { margin-bottom: 25px; }
+.category-title {
+    font-size: 0.9rem; color: var(--sub-text-color); border-bottom: 1px solid #333;
+    padding-bottom: 8px; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; font-weight: bold;
+}
+.category-title::before { content: '📂'; font-size: 1rem; filter: grayscale(1); opacity: 0.7;}
+.sound-grid { display: grid; gap: var(--gap); }
+
+#se-board .sound-grid { grid-template-columns: repeat(var(--columns), 1fr); }
+#bgm-board .sound-grid { grid-template-columns: repeat(var(--bgm-columns), 1fr); gap: 8px; }
+
+.empty-message {
+    padding: 40px; text-align: center; color: #666; font-size: 0.9rem;
+}
+
+/* --- Sound Button --- */
+.sound-btn {
+    background-color: #272727;
+    border-radius: 8px;
+    cursor: pointer;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+    position: relative;
+    overflow: visible;
+    border: 1px solid transparent;
+    touch-action: manipulation;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background-color 0.1s, transform 0.1s, box-shadow 0.1s;
+}
+
+.sound-btn:hover { 
+    background-color: #333; 
+    transform: translateY(-2px); 
+    box-shadow: 0 4px 8px rgba(0,0,0,0.4); 
+}
+.sound-btn:active { 
+    transform: translateY(0); 
+    box-shadow: 0 1px 2px rgba(0,0,0,0.3); 
+}
+
+/* SE Style */
+#se-board .sound-btn { 
+    aspect-ratio: 1 / 1; 
+    flex-direction: column; 
+    padding: 8px; 
+    overflow: hidden; 
+    justify-content: space-between; /* 上下に配置 */
+}
+/* BGM Style */
+#bgm-board .sound-btn {
+    width: 100%; height: 60px; aspect-ratio: auto;
+    flex-direction: row; justify-content: space-between; padding: 0 8px 0 8px;
+    background-color: #1f1f1f;
+    border-bottom: 1px solid #333;
+    border-radius: 4px;
+    box-shadow: none;
+}
+#bgm-board .sound-btn:hover { background-color: #333; transform: none; }
+
+.sound-btn.unassigned { background: transparent; border: 1px dashed #444; color: #666; box-shadow: none; }
+.sound-btn.unassigned:hover { border-color: #666; color: #888; }
+
+/* Playing States */
+.sound-btn.playing { 
+    border-color: var(--accent-color); 
+    background-color: var(--accent-light); 
+    box-shadow: 0 0 15px var(--accent-light); 
+}
+.sound-btn.bgm-playing { 
+    border-left: 4px solid var(--success-color); 
+    background-color: rgba(43, 166, 64, 0.1); 
+}
+.sound-btn.fading-out { opacity: 0.5; pointer-events: none; }
+
+.sound-btn .btn-name {
+    font-weight: 500; font-size: 0.9rem; flex-grow: 1; text-align: left;
+    overflow: hidden; white-space: nowrap; text-overflow: ellipsis; pointer-events: none; line-height: 1.2;
+}
+#se-board .sound-btn .btn-name { 
+    text-align: center; 
+    white-space: normal; 
+    font-size: 0.85rem; 
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; 
+    overflow: hidden; 
+    height: 2.4em; /* 高さを制限 */
+    line-height: 1.2;
+    margin-bottom: 5px;
+    pointer-events: none;
+}
+
+/* SE音量バーのラッパー */
+.se-vol-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    width: 100%;
+    height: 24px; /* 高さを確保して操作しやすく */
+    background: rgba(0,0,0,0.3); /* 背景を少し濃くして視認性アップ */
+    padding: 0 8px;
+    border-radius: 12px;
+    z-index: 100; /* クリック判定を最優先に */
+    margin-top: auto; /* 下寄せ */
+}
+
+.se-vol-wrapper input[type=range]::-webkit-slider-thumb {
+    height: 12px; 
+    width: 12px;
+    /* (24px - 12px) / 2 = 6px */
+    margin-top: 6px; 
+}
+
+/* フッターのSE停止ボタン */
+.se-stop-btn {
+    width: auto;
+    padding: 0 12px;
+    background-color: rgba(255, 78, 69, 0.15); 
+    color: #ff8a80;
+    border-color: rgba(255, 78, 69, 0.3);
+    font-weight: bold;
+    font-size: 0.8rem;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+}
+.se-stop-btn:hover {
+    background-color: var(--danger-color);
+    color: white;
+}
+
+
+
+/* SE音量スライダー本体 */
+.se-vol-wrapper input[type=range] {
+    flex-grow: 1;
+    height: 100%;
+    /* SE用は背景バーを少し細めに */
+    background-size: 100% 2px;
+}
+
+/* BGM Metadata Layout */
+.bgm-info-container {
+    display: flex; align-items: center; gap: 10px; flex-grow: 1; overflow: hidden;
+}
+.bgm-art {
+    width: 44px; height: 44px; border-radius: 4px; background-color: #333; flex-shrink: 0; 
+    background-size: cover; background-position: center;
+    display: flex; align-items: center; justify-content: center; 
+    font-size: 1.5rem; color: #555;
+}
+.bgm-text {
+    display: flex; flex-direction: column; overflow: hidden;
+}
+.bgm-title {
+    font-size: 0.95rem; font-weight: 500; color: #eee; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.bgm-artist {
+    font-size: 0.75rem; color: #aaa; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px;
+}
+
+.options-btn {
+    background: transparent; border: none; color: #777; font-size: 1.2rem;
+    padding: 0 10px; height: 100%; border-radius: 4px; cursor: pointer; z-index: 10;
+    display: flex; align-items: center; justify-content: center; transition: color 0.2s;
+}
+.options-btn:hover { color: white; }
+
+/* Option Menu Dropdown */
+.option-menu {
+    position: absolute; top: 100%; right: 0; background: #2d2d2d; border: 1px solid #444;
+    border-radius: 4px; box-shadow: 0 4px 10px rgba(0,0,0,0.5); z-index: 100; display: none; min-width: 140px; overflow: hidden;
+}
+.option-menu.visible { display: block; animation: fadeIn 0.1s ease; }
+.menu-item { padding: 10px 15px; font-size: 0.85rem; color: #eee; cursor: pointer; transition: background 0.1s; text-align: left; }
+.menu-item:hover { background: #444; }
+.menu-item.delete { border-top: 1px solid #333; color: #ff6b6b; }
+
+/* --- Footer Controls --- */
+.bgm-controls {
+    position: fixed; bottom: 0; left: 0; width: 100%; height: var(--footer-height);
+    background-color: #202020; padding: 0 20px; border-top: 1px solid #333;
+    display: flex; flex-direction: column; justify-content: center; gap: 0; z-index: 500;
+    box-shadow: 0 -4px 20px rgba(0,0,0,0.5);
+}
+
+.bgm-seek-wrapper { 
+    width: 100%; 
+    margin-bottom: 8px; /* 少し余白を広げる */
+    display: flex;      /* フレックスボックスで配置を安定させる */
+    align-items: center;
+}
+
+.slider-container {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    position: relative;
+    height: 24px; /* 操作しやすい高さ */
+    cursor: pointer;
+}
+
+.bgm-time { 
+    font-family: 'Roboto Mono', monospace; 
+    font-size: 0.75rem; 
+    color: #aaa; 
+    min-width: 90px; /* 少し幅を広げる */
+    text-align: right; 
+    margin-left: 12px;
+    line-height: 1;  /* 垂直中央揃えのため */
+}
+.bgm-info-row { display: flex; justify-content: space-between; align-items: center; width: 100%; height: 60px;}
+
+.bgm-left-group { display: flex; align-items: center; gap: 15px; flex: 1; overflow: hidden; }
+.bgm-status { font-size: 0.95rem; display: flex; align-items: center; gap: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500;}
+.playing-indicator { width: 8px; height: 8px; background-color: var(--success-color); border-radius: 50%; box-shadow: 0 0 8px var(--success-color); animation: blink 1.5s infinite; }
+
+.bgm-transport {
+    display: flex; align-items: center; gap: 15px;
+    position: absolute; left: 50%; transform: translateX(-50%); bottom: 15px;
+}
+.transport-btn {
+    background: transparent; border: none; color: #aaa;
+    font-size: 1.8rem; /* アイコン用に少し大きく */
+    cursor: pointer; padding: 8px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center; width: 48px; height: 48px;
+    transition: color 0.2s, background 0.2s, box-shadow 0.2s;
+}
+.transport-btn:hover { background: rgba(255,255,255,0.1); color: white; }
+.transport-btn.active { 
+    color: var(--accent-color);
+    background-color: rgba(255, 255, 255, 0.1); /* 背景色を追加 */
+    border: 1px solid var(--accent-color);       /* 枠線を追加 */
+    box-shadow: 0 0 8px var(--accent-light);     /* ぼんやり光らせる */
+}
+.play-pause-btn { font-size: 2rem; color: white; }
+.play-pause-btn:hover { transform: scale(1.1); }
+
+.bgm-right-controls { display: flex; align-items: center; gap: 20px; flex: 1; justify-content: flex-end; }
+.bgm-volume-wrapper { display: flex; align-items: center; gap: 8px; width: 120px; }
+.bgm-volume-wrapper i { 
+    font-size: 1.4rem; /* 少し大きく */
+    color: #aaa; 
+    /* font-style: normal; はMaterial Iconsクラスが上書きするので削除してもOKですがそのままでも可 */
+}.bgm-volume-wrapper .slider-container { width: 100px; }
+
+.stop-btn-group { display: flex; gap: 8px; }
+.mini-btn { font-size: 0.75rem; padding: 6px 10px; border-radius: 4px; border: 1px solid #444; background: #333; color: #ccc; transition: all 0.2s;}
+.mini-btn:hover { color: white; border-color: #666; background: #444; }
+.fade-stop-btn { color: var(--warning-color); border-color: rgba(255,193,7,0.3); }
+.fade-stop-btn:hover { background: var(--warning-color); color: #000; }
+.emergency-stop-btn { color: var(--danger-color); border-color: rgba(220,53,69,0.3); }
+.emergency-stop-btn:hover { background: var(--danger-color); color: white; }
+
+/* --- Reservation Queue (Floating) --- */
+.reservation-queue-floating {
+    position: fixed; bottom: 20px; right: 20px;
+    width: 320px; background-color: rgba(35, 35, 35, 0.98); border: 1px solid #444;
+    border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.6); z-index: 900;
+    display: none; flex-direction: column; backdrop-filter: blur(10px);
+    animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.reservation-queue-floating.visible { display: flex; }
+.queue-header { 
+    padding: 12px 16px; border-bottom: 1px solid #444; 
+    display: flex; justify-content: space-between; align-items: center; 
+    font-weight: bold; font-size: 0.9rem; color: var(--accent-color); 
+}
+.queue-list-container { max-height: 250px; overflow-y: auto; }
+.queue-item { padding: 10px 16px; border-bottom: 1px solid #333; display: flex; align-items: center; font-size: 0.85rem; transition: background 0.2s; }
+.queue-item:hover { background: rgba(255,255,255,0.05); }
+.queue-item:last-child { border-bottom: none; }
+.queue-time { color: #fff; font-weight: bold; margin-right: 12px; font-family: 'Roboto Mono', monospace; background: #444; padding: 2px 6px; border-radius: 4px; }
+.queue-name { flex-grow: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #ccc; }
+.queue-delete { color: #666; cursor: pointer; padding: 4px; border-radius: 50%; transition: all 0.2s; margin-left: 10px;}
+.queue-delete:hover { color: #ff4e45; background: rgba(255, 78, 69, 0.1); }
+
+@keyframes slideUp { from { transform: translateY(30px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes pulse { 0% { box-shadow: 0 0 0 0 var(--accent-light); } 70% { box-shadow: 0 0 0 10px var(--accent-light); } 100% { box-shadow: 0 0 0 0 var(--accent-light); } }
+@keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+/* --- Modals --- */
+.modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.8); z-index: 1000; backdrop-filter: blur(3px); }
+.modal-content { background-color: #272727; margin: 5% auto; padding: 25px; border-radius: 16px; width: 90%; max-width: 500px; border: 1px solid #444; position: relative; max-height: 90vh; overflow-y: auto; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+.close-btn { position: absolute; top: 20px; right: 25px; font-size: 24px; cursor: pointer; color: #999; transition: color 0.2s; }
+.close-btn:hover { color: #fff; }
+
+h2 { margin-top: 0; border-bottom: 1px solid #444; padding-bottom: 15px; margin-bottom: 20px; font-size: 1.2rem; }
+
+.setting-item { margin-bottom: 20px; }
+.setting-item label { display: block; margin-bottom: 8px; font-weight: bold; font-size: 0.9rem; color: #ccc; }
+input[type="text"], input[type="time"], select, input[type="number"] { 
+    width: 100%; padding: 10px; border-radius: 6px; background: #1a1a1a; border: 1px solid #444; color: white; font-size: 1rem; 
+    transition: border-color 0.2s;
+}
+input:focus, select:focus { border-color: var(--accent-color); outline: none; }
+
+.theme-selector { display: flex; gap: 15px; margin-top: 10px; }
+.theme-option { width: 36px; height: 36px; border-radius: 50%; cursor: pointer; border: 3px solid transparent; transition: transform 0.2s; }
+.theme-option:hover { transform: scale(1.1); }
+.theme-option.selected { border-color: white; box-shadow: 0 0 10px rgba(255,255,255,0.3); }
+
+.checkbox-item {
+    display: flex; flex-direction: row-reverse; justify-content: flex-end; align-items: center; gap: 10px;
+}
+.checkbox-item input[type="checkbox"] {
+    width: 20px; height: 20px; margin: 0;
+}
+
+/* --- Notifications --- */
+.notification {
+    position: fixed; top: 20px; right: 20px; padding: 12px 20px; border-radius: 8px; color: white; font-weight: bold; box-shadow: 0 4px 10px rgba(0,0,0,0.3); z-index: 10000;
+    opacity: 0; transition: opacity 0.3s; animation: slideInRight 0.3s forwards;
+}
+@keyframes slideInRight { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+/* --- Volume Adjust Mode --- */
+body.volume-adjust-mode .sound-btn { padding: 5px 15px; }
+.controls-wrapper { display: none; }
+#se-board .sound-btn.adjusting { justify-content: space-between; padding: 15px; }
+#se-board .controls-wrapper { display: flex; flex-direction: column; width: 100%; gap: 10px; }
+#bgm-board .controls-wrapper { display: none; } /* BGMはフッターで調整 */
+body.volume-adjust-mode #se-board .controls-wrapper { display: flex; }
+.sound-btn .volume-slider { width: 100%; height: 100%; }
+.color-presets { display: flex; gap: 5px; flex-wrap: wrap; justify-content: center; }
+.color-swatch { width: 16px; height: 16px; border-radius: 50%; cursor: pointer; border: 1px solid rgba(255,255,255,0.3); }
+
+
+/* --- Responsive --- */
+@media (max-width: 800px) {
+    .header h1 { font-size: 1rem; }
+    .controls button { padding: 6px 12px; font-size: 0.8rem; }
+    :root { --columns: 3; --footer-height: 160px; }
+    
+    .bgm-info-row { flex-direction: column; height: auto; align-items: stretch; gap: 10px; margin-top: 10px; }
+    .bgm-status { font-size: 0.9rem; }
+    .bgm-transport { position: relative; left: 0; transform: none; justify-content: center; margin: 5px 0; }
+    .bgm-right-controls { justify-content: space-between; }
+    .reservation-queue-floating { width: 90%; right: 5%; bottom: 20px; }
+}
+@media (max-width: 480px) {
+    :root { --columns: 2; }
+}
+    </style>
     <!-- MP3メタデータ取得用ライブラリ -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jsmediatags/3.9.5/jsmediatags.min.js"></script>
 </head>
