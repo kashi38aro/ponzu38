@@ -13,9 +13,13 @@ document.addEventListener('DOMContentLoaded', () => {
         fadeTime: 2.0,
         playOnRemote: false,
         themeColor: '#3ea6ff',
-        customBgmSlots: [],
+        customBgmSlots: [], // {id, name, assignedFileId, group}
         seFolder: 'SE',
-        bgmFolder: 'BGM'
+        bgmFolder: 'BGM',
+        seCompactMode: false,
+        showBgmArt: true,
+        showBgmArtist: true,
+        reservationPresets: []
     };
     
     // BGM State
@@ -24,7 +28,6 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentBgmId = null;
     let currentBgmBuffer = null;
     let currentBgmStartTime = 0;
-    let currentBgmPauseTime = 0;
     let isBgmPlaying = false;
     let isBgmLoop = true;
 
@@ -66,7 +69,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // --- Remote Command Handler (音量連動を追加) ---
+    // --- Remote Command Handler ---
     function handleRemoteCommand(msg) {
         if (msg.type === 'play') {
             const sound = [...soundsData.se, ...soundsData.bgm].find(s => s.id === msg.id);
@@ -78,14 +81,12 @@ document.addEventListener('DOMContentLoaded', () => {
         } else if (msg.type === 'stopSe') {
             stopAllSe();
         } else if (msg.type === 'volume') {
-            // ★追加: 音量連動ロジック
             if (msg.target === 'master') {
                 const el = document.getElementById('master-volume');
                 if (el) {
                     el.value = msg.value;
                     updateSliderBackground(el);
                     globalSettings.masterVolume = parseFloat(msg.value);
-                    // 再生中のBGM音量を即時更新
                     if (currentBgmGain) {
                         const bgmVol = document.getElementById('bgm-volume').value;
                         currentBgmGain.gain.setTargetAtTime(bgmVol * globalSettings.masterVolume, audioContext.currentTime, 0.1);
@@ -96,20 +97,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (el) {
                     el.value = msg.value;
                     updateSliderBackground(el);
-                    // 再生中のBGM音量を即時更新
                     if (currentBgmGain) {
                         currentBgmGain.gain.setTargetAtTime(msg.value * globalSettings.masterVolume, audioContext.currentTime, 0.1);
                     }
                 }
             } else if (msg.target === 'se') {
-                // SE個別音量の連動
-                // data-se-id 属性を使って該当のスライダーを探す
                 const slider = [...document.querySelectorAll('.volume-slider')].find(el => el.dataset.seId === msg.id);
                 if (slider) {
                     slider.value = msg.value;
                     updateSliderBackground(slider);
-                    
-                    // 設定保存
                     if (!globalSettings.sounds) globalSettings.sounds = {};
                     if (!globalSettings.sounds[msg.id]) globalSettings.sounds[msg.id] = {};
                     globalSettings.sounds[msg.id].volume = parseFloat(msg.value);
@@ -227,7 +223,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function playSoundFile(sound, type, fadeTime = 0, isRemoteOrigin = false) {
-        // リモコンモードの判定
         if (!isObs && !globalSettings.playOnRemote && !isRemoteOrigin) {
             sendCommand({ type: 'play', id: sound.id, catType: type });
             return; 
@@ -299,12 +294,26 @@ document.addEventListener('DOMContentLoaded', () => {
         updatePlayPauseIcon();
         startBgmTimer();
         
+        // Update Playing Classes
+        document.querySelectorAll('.sound-btn.bgm-playing').forEach(b => b.classList.remove('bgm-playing'));
+        const playingBtn = document.getElementById(`bgm-item-${soundData.id.replace(/[^a-zA-Z0-9]/g, '')}`);
+        if(playingBtn) playingBtn.classList.add('bgm-playing');
+        
+        // スロット側も光らせる
+        globalSettings.customBgmSlots.forEach(slot => {
+            if(slot.assignedFileId === soundData.id) {
+                const slotBtn = document.getElementById(`slot-item-${slot.id}`);
+                if(slotBtn) slotBtn.classList.add('bgm-playing');
+            }
+        });
+        
         source.onended = () => {
             if (currentBgmSource === source) {
                 if (!isBgmLoop) {
                    isBgmPlaying = false;
                    updatePlayPauseIcon();
                    updateBgmStatus("停止中", false);
+                   document.querySelectorAll('.sound-btn.bgm-playing').forEach(b => b.classList.remove('bgm-playing'));
                    clearInterval(bgmTimer);
                 }
             }
@@ -336,6 +345,7 @@ document.addEventListener('DOMContentLoaded', () => {
         seek.value = 0;
         updateSliderBackground(seek);
         if (bgmTimer) clearInterval(bgmTimer);
+        document.querySelectorAll('.sound-btn.bgm-playing').forEach(b => b.classList.remove('bgm-playing'));
     }
 
     function stopAllSe() {
@@ -354,23 +364,50 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
             renderCategoryGroup(seBoard, soundsData.se, 'se');
         }
-        const slotContainer = document.createElement('div');
-        slotContainer.className = 'sound-grid';
-        slotContainer.style.marginBottom = '10px';
+
+        // --- BGM スロットのレンダリング (グループ対応) ---
+        const slotGroups = { '固定項目': [] }; // デフォルトグループ
+        globalSettings.customBgmSlots.forEach(slot => {
+            const grp = slot.group || '固定項目';
+            if(!slotGroups[grp]) slotGroups[grp] = [];
+            slotGroups[grp].push(slot);
+        });
+
+        // 固定項目追加ボタン
         const addBtn = document.createElement('button');
         addBtn.id = 'add-bgm-slot-btn';
         addBtn.textContent = '＋ 固定項目を追加';
         addBtn.onclick = () => {
             const newId = `slot-${Date.now()}`;
-            globalSettings.customBgmSlots.push({ id: newId, name: '新規項目', assignedFileId: null });
+            globalSettings.customBgmSlots.push({ id: newId, name: '新規項目', assignedFileId: null, group: '固定項目' });
             saveSettings();
             renderTabs();
         };
-        globalSettings.customBgmSlots.forEach(slot => {
-            slotContainer.appendChild(createButton(slot, 'bgm', true));
-        });
         bgmBoard.appendChild(addBtn);
-        bgmBoard.appendChild(slotContainer);
+
+        // グループごとに描画
+        Object.keys(slotGroups).forEach(groupName => {
+            const groupDiv = document.createElement('div'); 
+            groupDiv.className = 'category-group';
+            
+            const title = document.createElement('div'); 
+            title.className = 'category-title'; 
+            title.textContent = groupName; 
+            
+            // グループ名が「固定項目」以外ならフォルダアイコンなどを変えてもよいが今は共通
+            groupDiv.appendChild(title);
+
+            const grid = document.createElement('div'); 
+            grid.className = 'sound-grid';
+            
+            slotGroups[groupName].forEach(slot => {
+                grid.appendChild(createButton(slot, 'bgm', true));
+            });
+            
+            groupDiv.appendChild(grid);
+            bgmBoard.appendChild(groupDiv);
+        });
+
         if (soundsData.bgm.length > 0) {
             const divider = document.createElement('hr');
             divider.className = 'section-divider';
@@ -400,28 +437,49 @@ document.addEventListener('DOMContentLoaded', () => {
     const createButton = (data, type, isSlot = false) => {
         const button = document.createElement('div');
         button.className = 'sound-btn';
-        if (isSlot && !data.assignedFileId) button.classList.add('unassigned');
-        if (!isSlot && data.id === currentBgmId) button.classList.add('bgm-playing');
-        else if (isSlot && data.assignedFileId === currentBgmId) button.classList.add('bgm-playing');
+        
+        let targetSound = null;
+        let isMissing = false;
+
+        if (isSlot) {
+            button.id = `slot-item-${data.id}`;
+            if (!data.assignedFileId) {
+                button.classList.add('unassigned');
+            } else {
+                targetSound = soundsData.bgm.find(s => s.id === data.assignedFileId);
+                if (!targetSound) {
+                    isMissing = true;
+                    button.classList.add('missing-file');
+                } else if (data.assignedFileId === currentBgmId && isBgmPlaying) {
+                    button.classList.add('bgm-playing');
+                }
+            }
+        } else {
+            // 通常のファイル
+            const elementId = `${type === 'bgm' ? 'bgm' : 'se'}-item-${data.id.replace(/[^a-zA-Z0-9]/g, '')}`;
+            button.id = elementId;
+            if (data.id === currentBgmId && isBgmPlaying) button.classList.add('bgm-playing');
+        }
 
         if (type === 'bgm') {
             const nameDisplay = isSlot ? data.name : data.name.replace(/\.[^/.]+$/, "");
             const optionBtn = `<button class="options-btn" title="メニュー">︙</button>`;
             let infoHTML = '';
+            
             if (isSlot) {
-                infoHTML = `<div class="bgm-info-container"><div class="bgm-text"><div class="bgm-title">${nameDisplay}</div><div class="bgm-artist">固定項目</div></div></div>`;
+                let artistText = "固定項目";
+                if (isMissing) artistText = "⚠️ ファイルが見つかりません";
+                else if (!data.assignedFileId) artistText = "ファイル未設定";
+
+                infoHTML = `<div class="bgm-info-container"><div class="bgm-text"><div class="bgm-title">${nameDisplay}</div><div class="bgm-artist">${artistText}</div></div></div>`;
             } else {
-                const elementId = `bgm-item-${data.id.replace(/[^a-zA-Z0-9]/g, '')}`;
-                button.id = elementId;
                 infoHTML = `<div class="bgm-info-container"><div class="bgm-art">🎵</div><div class="bgm-text"><div class="bgm-title">${nameDisplay}</div><div class="bgm-artist">Unknown Artist</div></div></div>`;
-                setTimeout(() => fetchMetadata(data, elementId), 0);
+                setTimeout(() => fetchMetadata(data, button.id), 0);
             }
             button.innerHTML = `${infoHTML}${optionBtn}`;
         } else {
             const nameDisplay = data.name.replace(/\.[^/.]+$/, "");
             const savedVol = globalSettings.sounds && globalSettings.sounds[data.id] ? globalSettings.sounds[data.id].volume : 1;
-            
-            // ★修正: data-se-id を追加して識別可能にする
             const volSlider = `<div class="se-vol-wrapper"><i class="material-icons-round" style="font-size:12px; color:#aaa;">volume_up</i><input type="range" class="volume-slider" min="0" max="1" step="0.01" value="${savedVol}" data-se-id="${data.id}"></div>`;
             
             button.innerHTML = `<div class="btn-name">${nameDisplay}</div>${volSlider}`;
@@ -435,15 +493,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (type === 'se') {
                 button.classList.add('playing');
-                setTimeout(() => button.classList.remove('playing'), 500);
+                setTimeout(() => button.classList.remove('playing'), 200); // 押した感演出
                 playSoundFile(data, 'se');
             } else if (type === 'bgm') {
-                let target = data;
                 if (isSlot) {
-                    if (!data.assignedFileId) { openSlotSettings(data.id); return; }
-                    target = soundsData.bgm.find(s => s.id === data.assignedFileId);
+                    if (isMissing || !data.assignedFileId) { openSlotSettings(data.id); return; }
+                    targetSound = soundsData.bgm.find(s => s.id === data.assignedFileId);
+                    if (targetSound) playSoundFile(targetSound, 'bgm', globalSettings.fadeTime);
+                } else {
+                    playSoundFile(data, 'bgm', globalSettings.fadeTime);
                 }
-                if (target) playSoundFile(target, 'bgm', globalSettings.fadeTime);
             }
         });
 
@@ -472,7 +531,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     globalSettings.sounds[data.id].volume = parseFloat(e.target.value);
                     saveSettings(); 
                     
-                    // ★追加: リモコンの場合、SE音量変更を送信
                     if (!isObs && !globalSettings.playOnRemote) {
                         sendCommand({ type: 'volume', target: 'se', id: data.id, value: e.target.value });
                     }
@@ -498,11 +556,29 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('se-folder-input').value = globalSettings.seFolder;
             document.getElementById('bgm-folder-input').value = globalSettings.bgmFolder;
             document.getElementById('play-on-remote-checkbox').checked = globalSettings.playOnRemote;
+            
+            document.getElementById('se-compact-mode-checkbox').checked = globalSettings.seCompactMode || false;
+            document.getElementById('show-bgm-art-checkbox').checked = globalSettings.showBgmArt !== false;
+            document.getElementById('show-bgm-artist-checkbox').checked = globalSettings.showBgmArtist !== false;
+            
+            applySeCompactMode(globalSettings.seCompactMode);
+            applyBgmDisplaySettings();
         }
     }
 
     function saveSettings() {
         localStorage.setItem('obs_pon_settings', JSON.stringify(globalSettings));
+    }
+
+    function applySeCompactMode(isCompact) {
+        if(isCompact) document.getElementById('se-board').classList.add('se-compact-mode');
+        else document.getElementById('se-board').classList.remove('se-compact-mode');
+    }
+    
+    function applyBgmDisplaySettings() {
+        const body = document.body;
+        if(globalSettings.showBgmArt === false) body.classList.add('hide-art'); else body.classList.remove('hide-art');
+        if(globalSettings.showBgmArtist === false) body.classList.add('hide-artist'); else body.classList.remove('hide-artist');
     }
 
     function startBgmTimer() {
@@ -518,7 +594,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     bar.value = percent;
                     updateSliderBackground(bar);
                     const m = Math.floor(currentTime/60);
-                    const s = Math.floor(currentTime%60);
+                    const s = Math.floor(currentTime/60);
                     const dm = Math.floor(duration/60);
                     const ds = Math.floor(duration%60);
                     document.getElementById('bgm-time-display').textContent = `${m}:${String(s).padStart(2,'0')} / ${dm}:${String(ds).padStart(2,'0')}`;
@@ -591,8 +667,6 @@ document.addEventListener('DOMContentLoaded', () => {
             if(id==='bgm-volume' && currentBgmGain) {
                  currentBgmGain.gain.setTargetAtTime(e.target.value * globalSettings.masterVolume, audioContext.currentTime, 0.1);
             }
-            
-            // ★追加: マスター/BGM音量の変更を送信
             if (!isObs && !globalSettings.playOnRemote) {
                 sendCommand({ type: 'volume', target: id === 'master-volume' ? 'master' : 'bgm', value: e.target.value });
             }
@@ -644,14 +718,46 @@ document.addEventListener('DOMContentLoaded', () => {
         };
     }
 
-    document.getElementById('settings-btn').addEventListener('click', () => document.getElementById('settings-modal').style.display = 'block');
-    document.querySelectorAll('.close-btn').forEach(b => b.addEventListener('click', (e) => e.target.closest('.modal').style.display = 'none'));
+    // 設定パネルの開閉
+    document.getElementById('settings-btn').addEventListener('click', () => {
+        document.getElementById('settings-modal').classList.add('open');
+        loadExternalFolders();
+    });
+    document.querySelectorAll('.settings-close').forEach(b => {
+        b.addEventListener('click', () => {
+             document.getElementById('settings-modal').classList.remove('open');
+        });
+    });
+    document.getElementById('settings-modal').addEventListener('click', (e) => {
+        if(e.target === document.getElementById('settings-modal')) {
+             document.getElementById('settings-modal').classList.remove('open');
+        }
+    });
+
+    document.querySelectorAll('.close-btn:not(.settings-close)').forEach(b => b.addEventListener('click', (e) => e.target.closest('.modal').style.display = 'none'));
+    
     document.getElementById('columns-input').addEventListener('input', (e) => { globalSettings.columns = e.target.value; document.documentElement.style.setProperty('--columns', e.target.value); saveSettings(); });
     document.getElementById('bgm-columns-input').addEventListener('input', (e) => { globalSettings.bgmColumns = e.target.value; document.documentElement.style.setProperty('--bgm-columns', e.target.value); saveSettings(); });
     document.getElementById('fade-time-input').addEventListener('input', (e) => { globalSettings.fadeTime = parseFloat(e.target.value); saveSettings(); });
     document.getElementById('se-folder-input').addEventListener('change', (e) => { globalSettings.seFolder = e.target.value; saveSettings(); loadSounds(); });
     document.getElementById('bgm-folder-input').addEventListener('change', (e) => { globalSettings.bgmFolder = e.target.value; saveSettings(); loadSounds(); });
     document.getElementById('play-on-remote-checkbox').addEventListener('change', (e) => { globalSettings.playOnRemote = e.target.checked; saveSettings(); });
+    
+    document.getElementById('se-compact-mode-checkbox').addEventListener('change', (e) => {
+        globalSettings.seCompactMode = e.target.checked;
+        applySeCompactMode(e.target.checked);
+        saveSettings();
+    });
+    document.getElementById('show-bgm-art-checkbox').addEventListener('change', (e) => {
+        globalSettings.showBgmArt = e.target.checked;
+        applyBgmDisplaySettings();
+        saveSettings();
+    });
+    document.getElementById('show-bgm-artist-checkbox').addEventListener('change', (e) => {
+        globalSettings.showBgmArtist = e.target.checked;
+        applyBgmDisplaySettings();
+        saveSettings();
+    });
 
     document.querySelectorAll('.theme-option').forEach(opt => {
         opt.addEventListener('click', (e) => {
@@ -672,8 +778,13 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
     
-    document.getElementById('reservation-btn').addEventListener('click', () => document.getElementById('reservation-queue-floating').classList.toggle('visible'));
-    document.getElementById('close-queue-btn').addEventListener('click', () => document.getElementById('reservation-queue-floating').classList.remove('visible'));
+    // 予約キューリストの開閉（最小化）
+    document.getElementById('reservation-btn').addEventListener('click', () => {
+        document.getElementById('reservation-queue-floating').classList.remove('hidden');
+    });
+    document.getElementById('close-queue-btn').addEventListener('click', () => {
+        document.getElementById('reservation-queue-floating').classList.add('hidden');
+    });
 
     const slotSettingsModal = document.getElementById('slot-settings-modal');
     let editingSlotId = null;
@@ -682,6 +793,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const slot = globalSettings.customBgmSlots.find(s => s.id === slotId);
         if(!slot) return;
         document.getElementById('slot-name-input').value = slot.name;
+        document.getElementById('slot-group-input').value = slot.group || '固定項目'; // 追加: グループ
         const sel = document.getElementById('slot-file-select');
         sel.innerHTML = '<option value="">(未設定)</option>';
         soundsData.bgm.forEach(s => {
@@ -694,6 +806,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const slot = globalSettings.customBgmSlots.find(s => s.id === editingSlotId);
         if(slot) {
             slot.name = document.getElementById('slot-name-input').value;
+            slot.group = document.getElementById('slot-group-input').value || '固定項目'; // 追加: グループ
             slot.assignedFileId = document.getElementById('slot-file-select').value;
             saveSettings();
             renderTabs();
@@ -721,6 +834,59 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const reservationModal = document.getElementById('reservation-modal');
+    
+    function renderReservationPresets() {
+        const list = document.getElementById('reservation-presets-list');
+        list.innerHTML = '';
+        if(!globalSettings.reservationPresets || globalSettings.reservationPresets.length === 0) {
+            list.innerHTML = '<div style="font-size:0.8rem; color:#888; text-align:center; padding:10px;">プリセットがありません</div>';
+            return;
+        }
+        globalSettings.reservationPresets.forEach((preset, idx) => {
+            const row = document.createElement('div');
+            row.style.cssText = "display:flex; justify-content:space-between; align-items:center; background:#333; padding:5px 10px; border-radius:4px; font-size:0.85rem;";
+            
+            const info = document.createElement('span');
+            info.style.cursor = 'pointer';
+            info.style.flex = '1';
+            const song = soundsData.bgm.find(s => s.id === preset.bgmId);
+            const songName = song ? song.name : '(不明な曲)';
+            info.innerHTML = `<span style="color:var(--accent-color); font-weight:bold;">${preset.time}</span> ${songName}`;
+            info.onclick = () => {
+                document.getElementById('reservation-time').value = preset.time;
+                document.getElementById('reservation-bgm-select').value = preset.bgmId;
+            };
+
+            const del = document.createElement('span');
+            del.textContent = '🗑';
+            del.style.cursor = 'pointer';
+            del.style.marginLeft = '10px';
+            del.onclick = () => {
+                if(confirm('このプリセットを削除しますか？')) {
+                    globalSettings.reservationPresets.splice(idx, 1);
+                    saveSettings();
+                    renderReservationPresets();
+                }
+            };
+            
+            row.appendChild(info);
+            row.appendChild(del);
+            list.appendChild(row);
+        });
+    }
+
+    document.getElementById('save-preset-btn').addEventListener('click', () => {
+        const t = document.getElementById('reservation-time').value;
+        const f = document.getElementById('reservation-bgm-select').value;
+        if(!t || !f) return alert('時間を曲を選択してください');
+        
+        if(!globalSettings.reservationPresets) globalSettings.reservationPresets = [];
+        globalSettings.reservationPresets.push({ time: t, bgmId: f });
+        globalSettings.reservationPresets.sort((a,b) => a.time.localeCompare(b.time));
+        saveSettings();
+        renderReservationPresets();
+    });
+
     window.openReservationModal = (fileId) => {
         const sel = document.getElementById('reservation-bgm-select');
         sel.innerHTML = '<option value="">(選択)</option>';
@@ -730,6 +896,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if(fileId) sel.value = fileId;
         const now = new Date(); now.setMinutes(now.getMinutes()+1);
         document.getElementById('reservation-time').value = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+        
+        renderReservationPresets();
         reservationModal.style.display = 'block';
     };
     document.querySelector('.reservation-close').addEventListener('click', () => reservationModal.style.display = 'none');
@@ -741,7 +909,7 @@ document.addEventListener('DOMContentLoaded', () => {
         reservationQueue.sort((a,b)=>a.timeStr.localeCompare(b.timeStr));
         renderQueue();
         reservationModal.style.display='none';
-        document.getElementById('reservation-queue-floating').classList.add('visible');
+        document.getElementById('reservation-queue-floating').classList.remove('hidden');
         showNotification('予約しました', 'success');
     });
 
@@ -869,8 +1037,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     document.getElementById('add-ext-folder-btn').addEventListener('click', addExternalFolder);
-    document.getElementById('settings-btn').addEventListener('click', () => { loadExternalFolders(); });
-
+    
     const seStopBtn = document.getElementById('se-stop-btn');
     if(seStopBtn) {
         seStopBtn.addEventListener('click', () => {
