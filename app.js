@@ -22,7 +22,7 @@ document.addEventListener('DOMContentLoaded', () => {
         reservationPresets: []
     };
     
-    // BGM State
+    // BGM State (Current)
     let currentBgmSource = null;
     let currentBgmGain = null;
     let currentBgmId = null;
@@ -30,6 +30,13 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentBgmStartTime = 0;
     let isBgmPlaying = false;
     let isBgmLoop = true;
+
+    // BGM State (Standby / 裏再生)
+    let standbyBgmSource = null;
+    let standbyBgmGain = null;
+    let standbyBgmId = null;
+    let standbyBgmBuffer = null;
+    let standbyBgmStartTime = 0;
 
     // SE State
     let activeSeSources = [];
@@ -74,12 +81,16 @@ document.addEventListener('DOMContentLoaded', () => {
         if (msg.type === 'play') {
             const sound = [...soundsData.se, ...soundsData.bgm].find(s => s.id === msg.id);
             if (sound) {
-                playSoundFile(sound, msg.catType, globalSettings.fadeTime, true);
+                playSoundFile(sound, msg.catType, globalSettings.fadeTime, true, msg.isStandby);
             }
+        } else if (msg.type === 'switchStandby') {
+            executeStandbySwitch();
         } else if (msg.type === 'stopBgm') {
             stopBgm(msg.fade);
         } else if (msg.type === 'stopSe') {
             stopAllSe();
+        } else if (msg.type === 'toggleBgm') {
+            toggleBgmState(msg.isPlaying);
         } else if (msg.type === 'volume') {
             if (msg.target === 'master') {
                 const el = document.getElementById('master-volume');
@@ -87,19 +98,14 @@ document.addEventListener('DOMContentLoaded', () => {
                     el.value = msg.value;
                     updateSliderBackground(el);
                     globalSettings.masterVolume = parseFloat(msg.value);
-                    if (currentBgmGain) {
-                        const bgmVol = document.getElementById('bgm-volume').value;
-                        currentBgmGain.gain.setTargetAtTime(bgmVol * globalSettings.masterVolume, audioContext.currentTime, 0.1);
-                    }
+                    updateGains();
                 }
             } else if (msg.target === 'bgm') {
                 const el = document.getElementById('bgm-volume');
                 if (el) {
                     el.value = msg.value;
                     updateSliderBackground(el);
-                    if (currentBgmGain) {
-                        currentBgmGain.gain.setTargetAtTime(msg.value * globalSettings.masterVolume, audioContext.currentTime, 0.1);
-                    }
+                    updateGains();
                 }
             } else if (msg.target === 'se') {
                 const slider = [...document.querySelectorAll('.volume-slider')].find(el => el.dataset.seId === msg.id);
@@ -111,6 +117,19 @@ document.addEventListener('DOMContentLoaded', () => {
                     globalSettings.sounds[msg.id].volume = parseFloat(msg.value);
                 }
             }
+        }
+    }
+
+    function updateGains() {
+        const bgmVol = document.getElementById('bgm-volume').value;
+        const master = globalSettings.masterVolume;
+        const now = audioContext ? audioContext.currentTime : 0;
+        
+        if (currentBgmGain) {
+            currentBgmGain.gain.setTargetAtTime(bgmVol * master, now, 0.1);
+        }
+        if (standbyBgmGain) {
+            standbyBgmGain.gain.setTargetAtTime(0, now, 0.1); 
         }
     }
 
@@ -142,7 +161,9 @@ document.addEventListener('DOMContentLoaded', () => {
     async function initAudio() {
         if (!audioContext) {
             audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            if (audioContext.state === 'suspended') await audioContext.resume();
+        }
+        if (audioContext.state === 'suspended') {
+            try { await audioContext.resume(); } catch (e) { console.warn('Audio resume failed:', e); }
         }
     }
 
@@ -198,6 +219,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function fetchMetadata(sound, elementId) {
         if (typeof jsmediatags === 'undefined') return;
+        if (sound.path.includes('/api/stream')) return;
+
         const el = document.getElementById(elementId);
         if(!el) return;
         const titleEl = el.querySelector('.bgm-title');
@@ -222,12 +245,11 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    async function playSoundFile(sound, type, fadeTime = 0, isRemoteOrigin = false) {
-        if (!isObs && !globalSettings.playOnRemote && !isRemoteOrigin) {
-            sendCommand({ type: 'play', id: sound.id, catType: type });
-            return; 
+    async function playSoundFile(sound, type, fadeTime = 0, isRemoteOrigin = false, isStandby = false) {
+        if (!isObs && !isRemoteOrigin) {
+            sendCommand({ type: 'play', id: sound.id, catType: type, isStandby: isStandby });
         }
-
+        
         await initAudio();
         try {
             let buffer;
@@ -245,7 +267,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 const gain = audioContext.createGain();
                 source.buffer = buffer;
                 source.connect(gain);
-                gain.connect(audioContext.destination);
+                
+                if (isObs || globalSettings.playOnRemote) {
+                    gain.connect(audioContext.destination);
+                }
                 
                 const vol = globalSettings.sounds?.[sound.id]?.volume || 1;
                 gain.gain.value = vol * globalSettings.masterVolume;
@@ -254,7 +279,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 activeSeSources.push(source);
                 source.onended = () => { activeSeSources = activeSeSources.filter(s => s !== source); };
             } else {
-                playBgmBuffer(buffer, sound, fadeTime);
+                playBgmBuffer(buffer, sound, fadeTime, isStandby);
             }
         } catch (e) {
             console.error("Play error:", e);
@@ -262,62 +287,165 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    function playBgmBuffer(buffer, soundData, fadeTime = 0) {
+    function playBgmBuffer(buffer, soundData, fadeTime = 0, isStandby = false) {
         const now = audioContext.currentTime;
-        if (currentBgmSource && isBgmPlaying) {
+
+        // ★修正ポイント: isBgmPlaying（再生中かどうか）に関わらず、
+        // 既存のソース（currentBgmSource）が存在する場合は必ず停止処理を行う
+        if (!isStandby && currentBgmSource) { // ← ここから && isBgmPlaying を削除
             const oldGain = currentBgmGain;
             const oldSource = currentBgmSource;
-            oldGain.gain.cancelScheduledValues(now);
-            oldGain.gain.setValueAtTime(oldGain.gain.value, now);
-            oldGain.gain.linearRampToValueAtTime(0, now + fadeTime);
-            oldSource.stop(now + fadeTime);
+            
+            // 安全策: すでに停止済みの可能性も考慮しつつ、フェードアウトをスケジュール
+            try {
+                oldGain.gain.cancelScheduledValues(now);
+                oldGain.gain.setValueAtTime(oldGain.gain.value, now);
+                oldGain.gain.linearRampToValueAtTime(0, now + fadeTime);
+                oldSource.stop(now + fadeTime);
+            } catch(e) {
+                // すでに停止している場合のエラーは無視
+                console.log("Old source cleanup:", e);
+            }
         }
+
+        if (isStandby && standbyBgmSource) {
+            standbyBgmSource.stop();
+            standbyBgmSource = null;
+        }
+
         const source = audioContext.createBufferSource();
         const gain = audioContext.createGain();
         source.buffer = buffer;
         source.loop = isBgmLoop;
         source.connect(gain);
-        gain.connect(audioContext.destination);
         
-        const vol = document.getElementById('bgm-volume').value * globalSettings.masterVolume;
-        gain.gain.setValueAtTime(vol, now); 
+        if (isObs || globalSettings.playOnRemote) {
+            gain.connect(audioContext.destination);
+        }
         
-        source.start(now);
-        currentBgmSource = source;
-        currentBgmGain = gain;
-        currentBgmId = soundData.id;
-        currentBgmBuffer = buffer;
-        currentBgmStartTime = now;
+        if (isStandby) {
+            gain.gain.setValueAtTime(0, now);
+            
+            standbyBgmSource = source;
+            standbyBgmGain = gain;
+            standbyBgmId = soundData.id;
+            standbyBgmBuffer = buffer;
+            standbyBgmStartTime = now;
+            
+            source.start(now);
+            
+            const switchBtn = document.getElementById('standby-switch-btn');
+            const infoArea = document.getElementById('bar-info-area');
+            if(switchBtn) {
+                switchBtn.style.display = 'block';
+                switchBtn.innerHTML = `🔀 ${soundData.name} へ切替`;
+            }
+            if(infoArea) infoArea.style.opacity = '0.5';
+            
+            showNotification(`${soundData.name} を裏で再生開始しました`, 'success');
+            
+        } else {
+            const vol = document.getElementById('bgm-volume').value * globalSettings.masterVolume;
+            gain.gain.setValueAtTime(vol, now); 
+            
+            source.start(now);
+            currentBgmSource = source;
+            currentBgmGain = gain;
+            currentBgmId = soundData.id;
+            currentBgmBuffer = buffer;
+            currentBgmStartTime = now;
+            isBgmPlaying = true;
+            
+            updateBgmStatus(soundData.name, true);
+            updatePlayPauseIcon();
+            startBgmTimer();
+            
+            document.querySelectorAll('.sound-btn.bgm-playing').forEach(b => b.classList.remove('bgm-playing'));
+            const playingBtn = document.getElementById(`bgm-item-${soundData.id.replace(/[^a-zA-Z0-9]/g, '')}`);
+            if(playingBtn) playingBtn.classList.add('bgm-playing');
+            
+            globalSettings.customBgmSlots.forEach(slot => {
+                if(slot.assignedFileId === soundData.id) {
+                    const slotBtn = document.getElementById(`slot-item-${slot.id}`);
+                    if(slotBtn) slotBtn.classList.add('bgm-playing');
+                }
+            });
+            
+            const switchBtn = document.getElementById('standby-switch-btn');
+            const infoArea = document.getElementById('bar-info-area');
+            if(switchBtn) switchBtn.style.display = 'none';
+            if(infoArea) infoArea.style.opacity = '1';
+        }
+        
+        if (!isStandby) {
+            source.onended = () => {
+                if (currentBgmSource === source) {
+                    if (!isBgmLoop) {
+                       isBgmPlaying = false;
+                       updatePlayPauseIcon();
+                       updateBgmStatus("停止中", false);
+                       document.querySelectorAll('.sound-btn.bgm-playing').forEach(b => b.classList.remove('bgm-playing'));
+                       clearInterval(bgmTimer);
+                    }
+                }
+            };
+        }
+    }
+
+    function executeStandbySwitch() {
+        if (!standbyBgmSource || !standbyBgmGain) return;
+        
+        const now = audioContext.currentTime;
+        const fade = globalSettings.fadeTime;
+        const targetVol = document.getElementById('bgm-volume').value * globalSettings.masterVolume;
+
+        if (currentBgmSource) {
+            currentBgmGain.gain.cancelScheduledValues(now);
+            currentBgmGain.gain.setValueAtTime(currentBgmGain.gain.value, now);
+            currentBgmGain.gain.linearRampToValueAtTime(0, now + fade);
+            currentBgmSource.stop(now + fade);
+        }
+
+        standbyBgmGain.gain.cancelScheduledValues(now);
+        standbyBgmGain.gain.setValueAtTime(0, now);
+        standbyBgmGain.gain.linearRampToValueAtTime(targetVol, now + fade);
+
+        currentBgmSource = standbyBgmSource;
+        currentBgmGain = standbyBgmGain;
+        currentBgmId = standbyBgmId;
+        currentBgmBuffer = standbyBgmBuffer;
+        currentBgmStartTime = standbyBgmStartTime;
         isBgmPlaying = true;
+
+        standbyBgmSource = null;
+        standbyBgmGain = null;
+        standbyBgmId = null;
+
+        const sound = soundsData.bgm.find(s => s.id === currentBgmId);
+        if (sound) {
+            updateBgmStatus(sound.name, true);
+            document.querySelectorAll('.sound-btn.bgm-playing').forEach(b => b.classList.remove('bgm-playing'));
+            const playingBtn = document.getElementById(`bgm-item-${sound.id.replace(/[^a-zA-Z0-9]/g, '')}`);
+            if(playingBtn) playingBtn.classList.add('bgm-playing');
+        }
         
-        updateBgmStatus(soundData.name, true);
         updatePlayPauseIcon();
         startBgmTimer();
+
+        const switchBtn = document.getElementById('standby-switch-btn');
+        const infoArea = document.getElementById('bar-info-area');
+        if(switchBtn) switchBtn.style.display = 'none';
+        if(infoArea) infoArea.style.opacity = '1';
         
-        // Update Playing Classes
-        document.querySelectorAll('.sound-btn.bgm-playing').forEach(b => b.classList.remove('bgm-playing'));
-        const playingBtn = document.getElementById(`bgm-item-${soundData.id.replace(/[^a-zA-Z0-9]/g, '')}`);
-        if(playingBtn) playingBtn.classList.add('bgm-playing');
-        
-        // スロット側も光らせる
-        globalSettings.customBgmSlots.forEach(slot => {
-            if(slot.assignedFileId === soundData.id) {
-                const slotBtn = document.getElementById(`slot-item-${slot.id}`);
-                if(slotBtn) slotBtn.classList.add('bgm-playing');
-            }
+        showNotification('BGMを切り替えました', 'success');
+    }
+
+    const switchBtn = document.getElementById('standby-switch-btn');
+    if (switchBtn) {
+        switchBtn.addEventListener('click', () => {
+            executeStandbySwitch();
+            sendCommand({ type: 'switchStandby' });
         });
-        
-        source.onended = () => {
-            if (currentBgmSource === source) {
-                if (!isBgmLoop) {
-                   isBgmPlaying = false;
-                   updatePlayPauseIcon();
-                   updateBgmStatus("停止中", false);
-                   document.querySelectorAll('.sound-btn.bgm-playing').forEach(b => b.classList.remove('bgm-playing'));
-                   clearInterval(bgmTimer);
-                }
-            }
-        };
     }
 
     function stopBgm(withFade = false) {
@@ -331,6 +459,16 @@ document.addEventListener('DOMContentLoaded', () => {
             currentBgmSource = null;
             isBgmPlaying = false;
         }
+        
+        if (standbyBgmSource) {
+            standbyBgmSource.stop();
+            standbyBgmSource = null;
+            const switchBtn = document.getElementById('standby-switch-btn');
+            if(switchBtn) switchBtn.style.display = 'none';
+            const infoArea = document.getElementById('bar-info-area');
+            if(infoArea) infoArea.style.opacity = '1';
+        }
+
         updatePlayPauseIcon();
         updateBgmStatus("停止中", false);
         const footerTitle = document.querySelector('#bgm-controls .bgm-title');
@@ -365,15 +503,13 @@ document.addEventListener('DOMContentLoaded', () => {
             renderCategoryGroup(seBoard, soundsData.se, 'se');
         }
 
-        // --- BGM スロットのレンダリング (グループ対応) ---
-        const slotGroups = { '固定項目': [] }; // デフォルトグループ
+        const slotGroups = { '固定項目': [] }; 
         globalSettings.customBgmSlots.forEach(slot => {
             const grp = slot.group || '固定項目';
             if(!slotGroups[grp]) slotGroups[grp] = [];
             slotGroups[grp].push(slot);
         });
 
-        // 固定項目追加ボタン
         const addBtn = document.createElement('button');
         addBtn.id = 'add-bgm-slot-btn';
         addBtn.textContent = '＋ 固定項目を追加';
@@ -385,7 +521,6 @@ document.addEventListener('DOMContentLoaded', () => {
         };
         bgmBoard.appendChild(addBtn);
 
-        // グループごとに描画
         Object.keys(slotGroups).forEach(groupName => {
             const groupDiv = document.createElement('div'); 
             groupDiv.className = 'category-group';
@@ -394,7 +529,6 @@ document.addEventListener('DOMContentLoaded', () => {
             title.className = 'category-title'; 
             title.textContent = groupName; 
             
-            // グループ名が「固定項目」以外ならフォルダアイコンなどを変えてもよいが今は共通
             groupDiv.appendChild(title);
 
             const grid = document.createElement('div'); 
@@ -455,7 +589,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
         } else {
-            // 通常のファイル
             const elementId = `${type === 'bgm' ? 'bgm' : 'se'}-item-${data.id.replace(/[^a-zA-Z0-9]/g, '')}`;
             button.id = elementId;
             if (data.id === currentBgmId && isBgmPlaying) button.classList.add('bgm-playing');
@@ -493,7 +626,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (type === 'se') {
                 button.classList.add('playing');
-                setTimeout(() => button.classList.remove('playing'), 200); // 押した感演出
+                setTimeout(() => button.classList.remove('playing'), 200); 
                 playSoundFile(data, 'se');
             } else if (type === 'bgm') {
                 if (isSlot) {
@@ -612,12 +745,27 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('bgm-play-pause-btn').textContent = isBgmPlaying ? 'pause' : 'play_arrow';
     }
 
+    function toggleBgmState(shouldPlay) {
+        if (!currentBgmSource) return;
+        
+        if (audioContext.state === 'suspended' && isBgmPlaying) audioContext.resume();
+
+        if (shouldPlay) {
+            audioContext.resume();
+            isBgmPlaying = true;
+        } else {
+            audioContext.suspend();
+            isBgmPlaying = false;
+        }
+        updatePlayPauseIcon();
+    }
+
     document.getElementById('bgm-play-pause-btn').addEventListener('click', () => {
         if (currentBgmSource) {
-            if (audioContext.state === 'suspended') audioContext.resume();
-            if (isBgmPlaying) { audioContext.suspend(); isBgmPlaying = false; }
-            else { audioContext.resume(); isBgmPlaying = true; }
-            updatePlayPauseIcon();
+            const nextState = !isBgmPlaying;
+            toggleBgmState(nextState);
+
+            sendCommand({ type: 'toggleBgm', isPlaying: nextState });
         }
     });
 
@@ -665,7 +813,8 @@ document.addEventListener('DOMContentLoaded', () => {
             updateSliderBackground(e.target);
             if(id==='master-volume') globalSettings.masterVolume = e.target.value;
             if(id==='bgm-volume' && currentBgmGain) {
-                 currentBgmGain.gain.setTargetAtTime(e.target.value * globalSettings.masterVolume, audioContext.currentTime, 0.1);
+                 // updateGainsで一括管理
+                 updateGains();
             }
             if (!isObs && !globalSettings.playOnRemote) {
                 sendCommand({ type: 'volume', target: id === 'master-volume' ? 'master' : 'bgm', value: e.target.value });
@@ -691,34 +840,12 @@ document.addEventListener('DOMContentLoaded', () => {
     seekBar.addEventListener('change', (e) => {
         if(currentBgmBuffer && isBgmPlaying) {
             const seekTime = (e.target.value / 100) * currentBgmBuffer.duration;
-            playBgmBufferAtOffset(currentBgmBuffer, soundsData.bgm.find(s => s.id === currentBgmId), seekTime);
+            // シークは現在再生中のものに対してのみ行う
+            const sound = soundsData.bgm.find(s => s.id === currentBgmId);
+            if(sound) playSoundFile(sound, 'bgm', 0.1, false); // シーク時の再生成（簡易実装）
         }
     });
 
-    function playBgmBufferAtOffset(buffer, soundData, offset) {
-        const now = audioContext.currentTime;
-        const source = audioContext.createBufferSource();
-        const gain = audioContext.createGain();
-        source.buffer = buffer;
-        source.loop = isBgmLoop;
-        source.connect(gain);
-        gain.connect(audioContext.destination);
-        const vol = document.getElementById('bgm-volume').value * globalSettings.masterVolume;
-        gain.gain.value = vol;
-        source.start(now, offset);
-        if(currentBgmSource) currentBgmSource.stop();
-        currentBgmSource = source;
-        currentBgmGain = gain;
-        currentBgmStartTime = now - offset;
-        isBgmPlaying = true;
-        source.onended = () => {
-            if (currentBgmSource === source && !isBgmLoop) {
-                   isBgmPlaying = false; updatePlayPauseIcon(); updateBgmStatus("停止中", false); clearInterval(bgmTimer);
-            }
-        };
-    }
-
-    // 設定パネルの開閉
     document.getElementById('settings-btn').addEventListener('click', () => {
         document.getElementById('settings-modal').classList.add('open');
         loadExternalFolders();
@@ -778,7 +905,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
     
-    // 予約キューリストの開閉（最小化）
     document.getElementById('reservation-btn').addEventListener('click', () => {
         document.getElementById('reservation-queue-floating').classList.remove('hidden');
     });
@@ -793,7 +919,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const slot = globalSettings.customBgmSlots.find(s => s.id === slotId);
         if(!slot) return;
         document.getElementById('slot-name-input').value = slot.name;
-        document.getElementById('slot-group-input').value = slot.group || '固定項目'; // 追加: グループ
+        document.getElementById('slot-group-input').value = slot.group || '固定項目'; 
         const sel = document.getElementById('slot-file-select');
         sel.innerHTML = '<option value="">(未設定)</option>';
         soundsData.bgm.forEach(s => {
@@ -806,7 +932,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const slot = globalSettings.customBgmSlots.find(s => s.id === editingSlotId);
         if(slot) {
             slot.name = document.getElementById('slot-name-input').value;
-            slot.group = document.getElementById('slot-group-input').value || '固定項目'; // 追加: グループ
+            slot.group = document.getElementById('slot-group-input').value || '固定項目'; 
             slot.assignedFileId = document.getElementById('slot-file-select').value;
             saveSettings();
             renderTabs();
@@ -896,27 +1022,70 @@ document.addEventListener('DOMContentLoaded', () => {
         if(fileId) sel.value = fileId;
         const now = new Date(); now.setMinutes(now.getMinutes()+1);
         document.getElementById('reservation-time').value = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+        // チェックボックスリセット
+        document.getElementById('reservation-standby-check').checked = false;
         
         renderReservationPresets();
         reservationModal.style.display = 'block';
     };
     document.querySelector('.reservation-close').addEventListener('click', () => reservationModal.style.display = 'none');
     
-    document.getElementById('add-reservation-btn').addEventListener('click', () => {
+    document.getElementById('add-reservation-btn').addEventListener('click', async () => {
+        await initAudio(); // ここでユーザー操作として認識させる
         const t=document.getElementById('reservation-time').value, f=document.getElementById('reservation-bgm-select').value;
+        const isStandby = document.getElementById('reservation-standby-check').checked;
+        
         if(!t||!f)return alert('必須入力');
-        reservationQueue.push({id:Date.now(), timeStr:t, bgmId:f, mode:'crossfade'});
+        reservationQueue.push({
+            id:Date.now(), 
+            timeStr:t, 
+            bgmId:f, 
+            mode:'crossfade',
+            isStandby: isStandby // 裏再生フラグを保存
+        });
         reservationQueue.sort((a,b)=>a.timeStr.localeCompare(b.timeStr));
         renderQueue();
         reservationModal.style.display='none';
         document.getElementById('reservation-queue-floating').classList.remove('hidden');
-        showNotification('予約しました', 'success');
+        showNotification(isStandby ? '裏再生モードで予約しました' : '予約しました', 'success');
     });
 
     function renderQueue() {
         const l=document.getElementById('floating-queue-list');
-        l.innerHTML=reservationQueue.length?reservationQueue.map(q=>`<div class="queue-item"><span class="queue-time">${q.timeStr}</span><span class="queue-name">${soundsData.bgm.find(x=>x.id===q.bgmId)?.name||'?'}</span><span class="queue-delete" data-id="${q.id}">🗑</span></div>`).join(''):'<div style="padding:20px;text-align:center;color:#666;font-size:0.9rem;">予約はありません</div>';
+        l.innerHTML=reservationQueue.length?reservationQueue.map(q=>`
+            <div class="queue-item">
+                <span class="queue-time">${q.timeStr}</span>
+                <span class="queue-name">${soundsData.bgm.find(x=>x.id===q.bgmId)?.name||'?'} ${q.isStandby ? '<span style="color:#ffeb3b; font-size:0.7em;">(裏)</span>' : ''}</span>
+                <span class="queue-countdown" style="font-family:monospace; margin-left:10px; font-size:0.8rem; color:#aaa;"></span>
+                <span class="queue-delete" data-id="${q.id}">🗑</span>
+            </div>`).join('') : '<div style="padding:20px;text-align:center;color:#666;font-size:0.9rem;">予約はありません</div>';
         l.querySelectorAll('.queue-delete').forEach(b=>b.addEventListener('click',e=>{reservationQueue=reservationQueue.filter(x=>x.id!==Number(e.target.dataset.id));renderQueue();}));
+        updateQueueCountdowns();
+    }
+
+    function updateQueueCountdowns() {
+        const now = new Date();
+        reservationQueue.forEach((q, index) => {
+            const item = document.querySelectorAll('.queue-item')[index];
+            if(!item) return;
+            const span = item.querySelector('.queue-countdown');
+            if(!span) return;
+
+            const [h, m] = q.timeStr.split(':');
+            const target = new Date(now);
+            target.setHours(h, m, 0, 0);
+            if (target < now) target.setDate(target.getDate() + 1);
+
+            const diff = target - now;
+            if (diff < 0) {
+                span.textContent = "00:00:00";
+            } else {
+                const hrs = Math.floor(diff / 3600000);
+                const mins = Math.floor((diff % 3600000) / 60000);
+                const secs = Math.floor((diff % 60000) / 1000);
+                span.textContent = `-${String(hrs).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+            }
+        });
     }
 
     function applyTheme(color, hover) {
@@ -929,6 +1098,9 @@ document.addEventListener('DOMContentLoaded', () => {
     setInterval(() => {
         const now = new Date();
         document.getElementById('clock-display').textContent = now.toLocaleTimeString('ja-JP', {hour12:false});
+        
+        updateQueueCountdowns();
+
         const shortTime = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
         if(now.getSeconds()===0) {
             const taskIndex = reservationQueue.findIndex(t => t.timeStr === shortTime);
@@ -936,8 +1108,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 const task = reservationQueue[taskIndex];
                 const sound = soundsData.bgm.find(s => s.id === task.bgmId);
                 if(sound) {
-                    playSoundFile(sound, 'bgm', globalSettings.fadeTime);
-                    showNotification(`予約実行: ${sound.name}`, 'success');
+                    // ここで予約時の isStandby 設定を渡す
+                    playSoundFile(sound, 'bgm', globalSettings.fadeTime, false, task.isStandby);
+                    
+                    if(!task.isStandby) {
+                         showNotification(`予約実行: ${sound.name}`, 'success');
+                    }
                 }
                 reservationQueue.splice(taskIndex, 1);
                 renderQueue();
@@ -953,7 +1129,10 @@ document.addEventListener('DOMContentLoaded', () => {
              document.getElementById('bar-countdown').textContent = `${String(hrs).padStart(2,'0')}:${String(mins).padStart(2,'0')}:${String(secs).padStart(2,'0')}`;
              document.getElementById('bar-next-song').textContent = soundsData.bgm.find(s=>s.id===next.bgmId)?.name || '?';
         } else {
-             document.getElementById('reservation-status-bar').classList.remove('active');
+             // 裏再生中は消さない
+             if(!standbyBgmSource) {
+                 document.getElementById('reservation-status-bar').classList.remove('active');
+             }
         }
     }, 1000);
 

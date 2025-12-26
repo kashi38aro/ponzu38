@@ -40,8 +40,13 @@
         </header>
 
         <div id="reservation-status-bar" class="reservation-status-bar">
-            <span>🕒 次の予約: <strong id="bar-countdown">--:--</strong></span>
-            <span id="bar-next-song" style="font-size: 0.8em; opacity: 0.8;">(曲名)</span>
+            <div id="bar-info-area">
+                <span>🕒 次の予約: <strong id="bar-countdown">--:--</strong></span>
+                <span id="bar-next-song" style="font-size: 0.8em; opacity: 0.8;">(曲名)</span>
+            </div>
+            <button id="standby-switch-btn" class="primary-btn" style="display:none; margin-left:15px; background:var(--warning-color); color:#000; font-weight:bold; animation: pulse 2s infinite;">
+                🔀 切り替え
+            </button>
         </div>
 
         <div class="sound-board-container">
@@ -160,6 +165,12 @@
                 </div>
                 <div class="setting-item">
                     <label>再生モード</label>
+
+                <div class="setting-item checkbox-item" style="margin-top:10px; background:#333; padding:10px; border-radius:4px;">
+                    <input type="checkbox" id="reservation-standby-check">
+                    <label for="reservation-standby-check" style="color:#fff;">裏で再生を進めておく (手動切り替え)</label>
+                </div>
+
                     <div style="display:flex; gap:20px; margin-top:5px;">
                         <label style="font-weight:normal; display:flex; align-items:center; gap:5px; color:#fff;"><input type="radio" name="playback-mode" value="crossfade" checked style="width:auto;"> クロスフェード</label>
                         <label style="font-weight:normal; display:flex; align-items:center; gap:5px; color:#fff;"><input type="radio" name="playback-mode" value="cutin" style="width:auto;"> カットイン</label>
